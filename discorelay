@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+
+from hata import Client, Guild, wait_for_interruption
+
+guild_id = int()
+GUILD = Guild.precreate(guild_id)
+
+token = ''
+Seija = Client(token, extensions = ['slash'])
+
+@Seija.events
+async def ready(client):
+    print(f'{client:f} logged in.')
+
+@Seija.interactions(guild = GUILD)
+async def ping():
+    """ping-pong"""
+    return 'pong'
+
+Seija.start()
+
+wait_for_interruption()
