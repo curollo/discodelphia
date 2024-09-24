@@ -1,22 +1,68 @@
 #!/usr/bin/env python3
+import socket, json, threading, requests, time
 
-from hata import Client, Guild, wait_for_interruption
+def build_discord_url(content): return f"https://discord.com/api/{content}"
+def build_webhook_url(id, token): return build_discord_url(f"webhooks/{id}/{token}")
+def get_auth_header(token): return {"Authorization": f"Bot {token}"}
 
-guild_id = int()
-GUILD = Guild.precreate(guild_id)
+class Disco: # channel
 
-token = ''
-Seija = Client(token, extensions = ['slash'])
+    def __init__(self, token, channel_id, relay):
+        self.token = token
+        self.channel_id = channel_id
+        self.relay = relay
+        self.webhooks = {}
+        threading.Thread(target=self.attend).start()
 
-@Seija.events
-async def ready(client):
-    print(f'{client:f} logged in.')
+    def attend(self):
+        while 1:
+            r = requests.get(
+                build_discord_url(f"channels/{self.channel_id}/messages"),
+                headers=get_auth_header(self.token)
+            )
 
-@Seija.interactions(guild = GUILD)
-async def ping():
-    """ping-pong"""
-    return 'pong'
+            if r.status_code < 200 or r.status_code >= 300:
+                raise Exception(f"Error {r.status_code}: {r.content}")
 
-Seija.start()
+            messages = json.loads(r.content)
+            print(messages) # debug
 
-wait_for_interruption()
+    def push_contents(self, name, msg):
+        if name not in self.webhooks:
+            self.get_webhook(name)
+        r = requests.post(
+            self.webhooks[name],
+            data={"content": msg, "username": name}
+        )
+
+        if r.status_code < 200 or r.status_code >= 300:
+            raise Exception(f"Error {r.status_code}: {r.content}")
+
+
+    def get_webhook(self, name):
+        r = requests.get(
+            build_discord_url(f"channels/{self.channel_id}/webhooks"),
+            headers=get_auth_header(self.token)
+        )
+
+        if r.status_code < 200 or r.status_code >= 300:
+            raise Exception(f"Error {r.status_code}: {r.content}")
+
+        webhooks = json.loads(r.content)
+        for webhook in webhooks:
+            if webhook["name"] == name:
+                self.webhooks[name] = build_webhook_url(webhook["id"], webhook["token"])
+                return
+
+        # create a new webhook if none exists
+        r = requests.post(
+            build_discord_url(f"channels/{self.channel_id}/webhooks"),
+            headers=get_auth_header(self.token),
+            data=json.dumps({"name": name})
+        )
+
+        if r.status_code < 200 or r.status_code >= 300:
+            raise Exception(f"Error {r.status_code}: {r.content}")
+
+        webhook = json.loads(r.content)
+        self.webhooks[name] = build_webhook_url(webhook["id"], webhook["token"])
