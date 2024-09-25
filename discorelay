@@ -113,3 +113,25 @@ class Disco: # channel
 
         webhook = json.loads(r.content)
         self.webhooks[name] = build_webhook_url(webhook["id"], webhook["token"])
+
+class RelaySetup:
+
+    def __init__(self, cfg):
+        self.cfg = configparser.ConfigParser()
+        self.cfg.read(cfg_file)
+        self.map_channel = {}
+
+    def load_mapping(self):
+        disco_channel = self.cfg["CHANNELS"]["DISCO"]
+        irc_channel = self.cfg["CHANNELS"]["IRC"]
+
+        self.map_channel[irc_channel] = Disco(self.cfg["DEFAULT"]["TOKEN"], disco_channel, self)
+        self.map_channel[disco_channel] = Puppeteer(self.cfg["DEFAULT"]["SERVER"], int(self.cfg["DEFAULT"]["PORT"]), irc_channel, self)
+        print('connection established')
+
+
+if __name__ == "__main__":
+    cfg_file = "config.ini"
+    start_relay = RelaySetup(cfg_file) # create relay
+    start_relay.load_mapping() # load channel mapping
+
