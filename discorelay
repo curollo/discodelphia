@@ -1,6 +1,53 @@
 #!/usr/bin/env python3
 import socket, json, threading, requests, time
 
+class Puppeteer:
+
+    def __init__(self, ip, port, channel, relay):
+        self.ip = ip
+        self.port = port
+        self.channel = channel
+        self.users = {}
+        self.puppet = self.add_puppeteer()
+
+    def send(self, socket, message):
+        socket.send(bytes(message, "utf-8"))
+        time.sleep(0.2)
+
+    def add_puppeteer(self, nick='puppet'):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((self.ip, self.port))
+        self.send(s, ("NICK %s\n" % nick))
+        self.send(s, ("USER %s 0 * :%s\n" % (nick, nick)))
+        self.send(s, ("JOIN %s\n" % self.channel))
+
+        threading.Thread(target=self.attend, args=(nick, s)).start()
+        return s
+
+    def attend(self, user, socket):
+        while 1:
+            buff = socket.recv(1024)
+            if not buff:
+                socket.close()
+                print("can't connect")
+                return
+
+            msg = buff.decode("utf-8").split(' ')
+            sender = msg[0].split('!')[0][1:]
+            print(msg[0]) # debug
+            print('------------')
+            print(msg[1])
+
+            if msg[0] == "PING":
+                self.send(socket, ("PONG %s\n" % msg[1]) )
+                continue
+            if msg[1] == "PRIVMSG" and sender not in self.users:
+                if msg[2] == self.channel and user == "puppet":
+                    parsed_msg = " ".join(msg[3:])[1:-2] # parse channel msg
+                    print(parsed_msg) # debug
+                    continue
+
+
 def build_discord_url(content): return f"https://discord.com/api/{content}"
 def build_webhook_url(id, token): return build_discord_url(f"webhooks/{id}/{token}")
 def get_auth_header(token): return {"Authorization": f"Bot {token}"}
