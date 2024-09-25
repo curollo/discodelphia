@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import socket, json, threading, requests, time
+import socket, json, threading, requests, configparser, time
 
 class Puppeteer:
 
@@ -24,6 +24,21 @@ class Puppeteer:
         threading.Thread(target=self.attend, args=(nick, s)).start()
         return s
 
+    def push(self, nick, msg):
+        if int(msg["type"]) != 0: # plaintext only
+            print("illegal message type: %s, ignoring" % msg["type"])
+            return
+
+        nick = msg["author"]["username"]
+        if nick not in self.users: self.users[nick] = self.add_puppeteer(nick)
+
+        content = msg["content"]
+        if "message_reference" in msg:
+            content = msg["referenced_message"]["author"]["username"] + ": " + content
+            print(content) # debug
+
+        self.send(self.users[nick], ("PRIVMSG %s :%s\n" % (self.channel, content)))
+
     def attend(self, user, socket):
         while 1:
             buff = socket.recv(1024)
@@ -34,9 +49,6 @@ class Puppeteer:
 
             msg = buff.decode("utf-8").split(' ')
             sender = msg[0].split('!')[0][1:]
-            print(msg[0]) # debug
-            print('------------')
-            print(msg[1])
 
             if msg[0] == "PING":
                 self.send(socket, ("PONG %s\n" % msg[1]) )
@@ -44,7 +56,7 @@ class Puppeteer:
             if msg[1] == "PRIVMSG" and sender not in self.users:
                 if msg[2] == self.channel and user == "puppet":
                     parsed_msg = " ".join(msg[3:])[1:-2] # parse channel msg
-                    print(parsed_msg) # debug
+                    self.relay.push(self.channel, sender, parsed_msg)
                     continue
 
 
@@ -129,6 +141,9 @@ class RelaySetup:
         self.map_channel[disco_channel] = Puppeteer(self.cfg["DEFAULT"]["SERVER"], int(self.cfg["DEFAULT"]["PORT"]), irc_channel, self)
         print('connection established')
 
+    def push(self, channel, name, msg):
+        if channel in self.map_channel:
+            self.map_channel[channel].push(name, msg)
 
 if __name__ == "__main__":
     cfg_file = "config.ini"
