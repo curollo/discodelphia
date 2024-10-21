@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import socket
 import json
 import threading
@@ -6,7 +7,20 @@ import requests
 import configparser
 import time
 
+
 class Puppeteer:
+    """
+    Manages a puppeteer relaying messages between a Discord channel and an IRC channel.
+
+    Attributes:
+        ip (str): The IP address of the IRC server.
+        port (int): The port number of the IRC server.
+        channel (str): The name of the IRC channel to join.
+        relay (object): The relay object that will receive messages from the IRC channel.
+        users (dict): A dictionary of users and their corresponding sockets.
+        puppet (socket): The socket object for the puppeteer.
+    """
+
     def __init__(self, ip, port, channel, relay):
         self.ip = ip
         self.port = port
@@ -16,10 +30,28 @@ class Puppeteer:
         self.puppet = self.add_puppeteer()
 
     def send(self, socket, message):
+        """
+        Send a message to the IRC server through the provided socket connection.
+
+        Args:
+            socket (socket): The socket object to send the message through.
+            message (str): The message to send.
+        """
+
         socket.send(bytes(message, "utf-8"))
         time.sleep(0.2)
 
-    def add_puppeteer(self, nick='puppet'):
+    def add_puppeteer(self, nick="puppet"):
+        """
+        Adds a new puppeteer bot to the IRC channel.
+
+        Args:
+            nick (str, optional): The nickname of the puppeteer bot. Defaults to 'puppet'.
+
+        Returns:
+            socket: The socket object for the puppeteer bot.
+        """
+
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((self.ip, self.port))
         self.send(s, ("NICK %s\n" % nick))
@@ -30,115 +62,310 @@ class Puppeteer:
         return s
 
     def push(self, nick, msg):
-        if int(msg["type"]) != 0: # plaintext only
+        """
+        Pushes a message from the Discord channel to the IRC channel.
+
+        Args:
+            nick (str): The nickname of the user who sent the message.
+            msg (dict): The message object.
+        """
+
+        if int(msg["type"]) != 0:  # plaintext only
             print("illegal message type: %s, ignoring" % msg["type"])
             return
 
         nick = msg["author"]["username"]
-        if nick not in self.users: self.users[nick] = self.add_puppeteer(nick)
+        if nick not in self.users:
+            self.users[nick] = self.add_puppeteer(nick)
 
         content = msg["content"]
-        if "message_reference" in msg:
+        print(
+            f"\033[95mDISCORD\033[0m: \033[94mMSG\033[0m: \033[1m{content}\033[0m"
+        )  # debug
+        if "message_reference" in msg:  # add the original message to the reply
             content = msg["referenced_message"]["author"]["username"] + ": " + content
-            print(content) # debug
+            print(
+                f"\033[95mDISCORD\033[0m: \033[91mReply MSG\033[0m: \033[1m{content}\033[0m"
+            )  # debug
 
         self.send(self.users[nick], ("PRIVMSG %s :%s\n" % (self.channel, content)))
 
     def attend(self, user, socket):
+        """
+        Attends to incoming messages from the IRC server.
+
+        Args:
+            user (str): The nickname of the user who sent the message.
+            socket (socket): The socket object to receive messages from.
+        """
+
         while 1:
             buff = socket.recv(1024)
-            print(buff) #debug
             if not buff:
                 socket.close()
                 print("can't connect")
                 return
 
-            msg = buff.decode("utf-8").split(' ')
-            sender = msg[0].split('!')[0][1:]
+            msg = buff.decode("utf-8").split(" ")
+            sender = msg[0].split("!")[0][1:]
 
+            # respond to PING message
             if msg[0] == "PING":
-                self.send(socket, ("PONG %s\n" % msg[1]) )
+                self.send(socket, ("PONG %s\n" % msg[1]))
                 continue
+
+            # relay messages from the IRC channel to the Discord channel
             if len(msg) > 2 and msg[1] == "PRIVMSG" and sender not in self.users:
                 if msg[2] == self.channel and user == "puppet":
-                    parsed_msg = " ".join(msg[3:])[1:-2] # parse channel msg
+                    parsed_msg = " ".join(msg[3:])[1:-2]  # parse channel msg
+                    print(
+                        f"\033[92mIRC\033[0m: \033[94mMSG\033[0m: \033[1m{parsed_msg}\033[0m"
+                    )  # debug
                     self.relay.push(self.channel, sender, parsed_msg)
                     continue
 
+
 class Disco:
+    """
+    Manage messages via webhook connections with Discord.
+
+    Attributes:
+        token (str): The token of the Discord bot.
+        channel_id (str): The ID of the Discord channel.
+        relay (object): The relay object that will receive messages from the Discord channel.
+        lm_id (str): The ID of the last message received from the Discord channel.
+        webhooks (dict): A dictionary of webhooks for sending messages to the Discord channel.
+    """
+
     def __init__(self, token, channel_id, relay):
         self.token = token
         self.channel_id = channel_id
         self.relay = relay
+        self.lm_id = self.relay.last_msg(self.channel_id)
         self.webhooks = {}
-        self.polling = 10
         threading.Thread(target=self.attend).start()
 
-    def build_url(self, content): return f"https://discord.com/api/{content}"
-    def build_webhook_url(self, id, token): return self.build_url(f"webhooks/{id}/{token}")
-    def get_auth_header(self, token): return {"Authorization": f"Bot {token}"}
+    def build_url(self, content):
+        """
+        Build a URL for the Discord API.
+
+        Args:
+            content (str): The content of the URL.
+
+        Returns:
+            str: The built URL.
+        """
+
+        return f"https://discord.com/api/{content}"
+
+    def build_webhook_url(self, id, token):
+        """
+        Build a URL for a Discord webhook.
+
+        Args:
+            id (str): The ID of the webhook.
+            token (str): The token of the webhook.
+
+        Returns:
+            str: The built URL.
+        """
+
+        return self.build_url(f"webhooks/{id}/{token}")
+
+    def get_auth_header(self, token):
+        """
+        Get the authentication header for the Discord API.
+
+        Args:
+            token (str): The token of the Discord bot.
+
+        Returns:
+            dict: The authentication header.
+        """
+
+        return {"Authorization": f"Bot {token}"}
 
     def attend(self):
+        """
+        Attend to incoming messages from the Discord channel.
+
+        This method is run in a separate thread and polls the Discord API for new messages every 15 seconds.
+        """
+
         while 1:
+            params = (
+                {"after": self.lm_id} if self.lm_id else None
+            )  # capture only last msg
             r = requests.get(
-                    self.build_url(f"channels/{self.channel_id}/messages"),
-                    headers=self.get_auth_header(self.token),
-                    params=None)
-            if not 200 <= r.status_code < 300: raise Exception(f"Error {r.status_code}: {r.content}")
+                self.build_url(f"channels/{self.channel_id}/messages"),
+                headers=self.get_auth_header(self.token),
+                params=params,
+            )
+            if not 200 <= r.status_code < 300:
+                raise Exception(f"Error {r.status_code}: {r.content}")
 
             messages = json.loads(r.content)
             if messages:
                 self.lm_id = messages[0]["id"]
                 for message in reversed(messages):
-                    if "webhook_id" not in message: self.relay.push(self.channel_id, None, message)
-            time.sleep(self.refresh) # TODO:add custom refresh rate in config
+                    if "webhook_id" not in message:
+                        self.relay.push(self.channel_id, None, message)
+            time.sleep(15)  # poll the channel for new messages every 15s
 
     def push(self, name, msg):
-        if name not in self.webhooks: self.get_webhook(name)
-        r = requests.post(
-                self.webhooks[name],
-                data={"content": msg, "username": name})
-        if not 200 <= r.status_code < 300: raise Exception(f"Error {r.status_code}: {r.content}")
+        """
+        Push a message to the Discord channel.
+
+        Args:
+            name (str): The name of the user who sent the message.
+            msg (str): The message to send.
+        """
+
+        if name not in self.webhooks:
+            self.get_webhook(name)
+        r = requests.post(self.webhooks[name], data={"content": msg, "username": name})
+        if not 200 <= r.status_code < 300:
+            raise Exception(f"Error {r.status_code}: {r.content}")
 
     def get_webhook(self, name):
+        """
+        Get a webhook for sending messages to the Discord channel.
+
+        Args:
+            name (str): The name of the webhook.
+
+        If the webhook does not exist, it is created.
+        """
+
         r = requests.get(
-                self.build_url(f"channels/{self.channel_id}/webhooks"),
-                headers=self.get_auth_header(self.token))
-        if not 200 <= r.status_code < 300: raise Exception(f"Error {r.status_code}: {r.content}")
+            self.build_url(f"channels/{self.channel_id}/webhooks"),
+            headers=self.get_auth_header(self.token),
+        )
+        if not 200 <= r.status_code < 300:
+            raise Exception(f"Error {r.status_code}: {r.content}")
 
         webhooks = json.loads(r.content)
         for webhook in webhooks:
             if webhook["name"] == name:
-                self.webhooks[name] = self.build_webhook_url(webhook["id"], webhook["token"])
+                self.webhooks[name] = self.build_webhook_url(
+                    webhook["id"], webhook["token"]
+                )
                 return
         r = requests.post(
-                self.build_url(f"channels/{self.channel_id}/webhooks"),
-                headers=self.get_auth_header(self.token),
-                data=json.dumps({"name": name}))
-        if not 200 <= r.status_code < 300: raise Exception(f"Error {r.status_code}: {r.content}")
+            self.build_url(f"channels/{self.channel_id}/webhooks"),
+            headers=self.get_auth_header(self.token),
+            data=json.dumps({"name": name}),
+        )
+        if not 200 <= r.status_code < 300:
+            raise Exception(f"Error {r.status_code}: {r.content}")
 
         webhook = json.loads(r.content)
         self.webhooks[name] = self.build_webhook_url(webhook["id"], webhook["token"])
 
+
 class RelaySetup:
-    def __init__(self, cfg):
+    """
+    Manage the setup and configuration of a relay between Discord and IRC channels.
+
+    Attributes:
+        cfg (configparser.ConfigParser): The configuration parser object.
+        map_channel (dict): A dictionary mapping channel names to their corresponding relay objects.
+    """
+
+    def __init__(self, cfg_file):
+        """
+        Initializes the RelaySetup object with a configuration file.
+
+        Args:
+            cfg_file (str): The path to the configuration file.
+
+        Raises:
+            FileNotFoundError: If the configuration file does not exist.
+        """
+
         self.cfg = configparser.ConfigParser()
         self.cfg.read(cfg_file)
         self.map_channel = {}
 
     def load(self):
+        """
+        Load the channel mapping from the configuration file and establish connections.
+        """
+
+        # get the Discord and IRC channel names
         disco_channel = self.cfg["CHANNELS"]["DISCO"]
         irc_channel = self.cfg["CHANNELS"]["IRC"]
 
-        self.map_channel[irc_channel] = Disco(self.cfg["DEFAULT"]["TOKEN"], disco_channel, self)
-        self.map_channel[disco_channel] = Puppeteer(self.cfg["DEFAULT"]["SERVER"], int(self.cfg["DEFAULT"]["PORT"]), irc_channel, self)
-        print('connection established')
+        # create relay objects for each channel and store them
+        self.map_channel[irc_channel] = Disco(
+            self.cfg["DEFAULT"]["TOKEN"], disco_channel, self
+        )
+        self.map_channel[disco_channel] = Puppeteer(
+            self.cfg["DEFAULT"]["SERVER"],
+            int(self.cfg["DEFAULT"]["PORT"]),
+            irc_channel,
+            self,
+        )
+
+        # debug info
+        print(
+            f"\n\033[92m{'='*20} Connection Established {'='*20}\033[0m\n"
+            f"\033[94mDiscord Channel:\033[0m \033[1m{disco_channel}\033[0m\n"
+            f"\033[94mIRC Channel:\033[0m \033[1m{irc_channel}\033[0m\n"
+            f"\033[94mDiscord Token:\033[0m \033[1m{self.cfg['DEFAULT']['TOKEN'][:4]}... (hidden for security reasons)\033[0m\n"
+            f"\033[94mIRC Server:\033[0m \033[1m{self.cfg['DEFAULT']['SERVER']}\033[0m\n"
+            f"\033[94mIRC Port:\033[0m \033[1m{self.cfg['DEFAULT']['PORT']}\033[0m\n"
+            f"\n\033[92m{'='*20} Relay Ready {'='*20}\033[0m\n"
+        )
+
+    def last_msg(self, channel_id, new_id=None):
+        """
+        Get or set the last message ID for a given channel.
+
+        Args:
+            channel_id (str): The ID of the channel.
+            new_id (int, optional): The new message ID to set. Defaults to None.
+
+        Returns:
+            int: The last message ID for the given channel.
+        """
+
+        # check if the last message ID exists
+        if not os.path.exists("lastmsg.json"):
+            with open("lastmsg.json", "w") as f:
+                json.dump({}, f)
+
+        # if a new ID is provided, update the last message ID for the given channel
+        j = json.load(open("lastmsg.json"))
+        if new_id or channel_id not in j:
+            j[channel_id] = new_id
+
+        # return updated last message ID
+        with open("lastmsg.json", "w") as o:
+            o.write(json.dumps(j, indent=4))
+
+        return j[channel_id]
 
     def push(self, channel, name, msg):
+        """
+        Push a message to a given channel.
+
+        Args:
+            channel (str): The name of the channel.
+            name (str): The name of the sender.
+            msg (str): The message to send.
+
+        Raises:
+            KeyError: If the channel is not in the map_channel dictionary.
+        """
+
+        # check if the channel is in the map_channel dictionary
         if channel in self.map_channel:
+            # push the message to the channel using the corresponding relay object
             self.map_channel[channel].push(name, msg)
+
 
 if __name__ == "__main__":
     cfg_file = "config.ini"
-    start_disco = RelaySetup(cfg_file) # create relay
-    start_disco.load() # load channel mapping
+    start_relay = RelaySetup(cfg_file)  # create relay
+    start_relay.load()  # load channel mapping
