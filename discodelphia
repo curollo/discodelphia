@@ -1,7 +1,12 @@
-import socket, json, threading, requests, configparser, time
+#!/usr/bin/env python3
+import socket
+import json
+import threading
+import requests
+import configparser
+import time
 
 class Puppeteer:
-
     def __init__(self, ip, port, channel, relay):
         self.ip = ip
         self.port = port
@@ -54,14 +59,13 @@ class Puppeteer:
             if msg[0] == "PING":
                 self.send(socket, ("PONG %s\n" % msg[1]) )
                 continue
-            if msg[1] == "PRIVMSG" and sender not in self.users:
+            if len(msg) > 2 and msg[1] == "PRIVMSG" and sender not in self.users:
                 if msg[2] == self.channel and user == "puppet":
                     parsed_msg = " ".join(msg[3:])[1:-2] # parse channel msg
                     self.relay.push(self.channel, sender, parsed_msg)
                     continue
 
 class Disco:
-
     def __init__(self, token, channel_id, relay):
         self.token = token
         self.channel_id = channel_id
@@ -117,7 +121,6 @@ class Disco:
         self.webhooks[name] = self.build_webhook_url(webhook["id"], webhook["token"])
 
 class RelaySetup:
-
     def __init__(self, cfg):
         self.cfg = configparser.ConfigParser()
         self.cfg.read(cfg_file)
